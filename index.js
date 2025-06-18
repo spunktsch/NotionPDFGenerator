@@ -1,30 +1,48 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs');
-const PDFMerger = require('pdf-merger-js');
+const path = require('path');
+const PDFMerger = require('pdf-merger-js').default;
 const util = require('util');
 const readdir = util.promisify(fs.readdir);
 
-const url = 'file:///C:/PATH/TO/THE/EXPORTED/HTML/FILE.html';
+const url = 'file:///Users/basti/code/NotionPDFGenerator/Kuehlung%20-%20index%201fade27b7c0d808b9709e68bc41f4b5a.html';
 
+// Ensure output directory exists
+const outputDir = path.join(__dirname, 'out');
+if (!fs.existsSync(outputDir)) {
+  fs.mkdirSync(outputDir, { recursive: true });
+}
 
+// Clean output directory before starting
+fs.readdirSync(outputDir).forEach(file => {
+  if (file.endsWith('.pdf')) {
+    fs.unlinkSync(path.join(outputDir, file));
+  }
+});
 
-let depth = 1;
-let printed = [];
+// Use a single browser instance
+let browser = null;
+
+// Track visited URLs and their assigned index/filename
+let printed = new Map();
+let pdfOrder = [];
+
+let pdfIndex = 0;
 const printPdf = async (url) => {
+    if (printed.has(url)) {
+        console.log("Already visited " + url + "! Skipping...");
+        return;
+    }
     console.log('Generating PDF for: ' + url);
 
-	if(depth >= 100){
-		//Failsafe
-		return;
-	}
-
-    const browser = await puppeteer.launch({
-        headless: true
-    });
+    if (pdfIndex >= 100) {
+        //Failsafe
+        return;
+    }
 
     const page = await browser.newPage();
 
-    page.setViewport({
+    await page.setViewport({
         width: 1920,
         height: 1080
     });
@@ -33,79 +51,81 @@ const printPdf = async (url) => {
         waitUntil: 'networkidle2'
     });
 
-	const hrefs = await page.$$eval('a', as => as.map(a => a.href));
-	for(let href of hrefs){
-		if(href.indexOf("file://") == 0){
-			
-			if(printed.indexOf(href) != -1){
-				console.log("Already visited " + href + "! Skipping...");
-				continue;
-			}
-			
-			printed.push(href);
-			
-			let newUrl = href;
-			let extensionSplit = newUrl.split(".");
-			if(extensionSplit[1].trim() != "html"){
-				continue;
-			}
-			
-			let thisDepth = depth;
-			depth++;
-			
-			
-			const newBuff = await(printPdf(newUrl));
-			writeBufferToFile(newBuff, thisDepth+".pdf");
+    // Assign a unique filename for this PDF
+    const filename = `${pdfIndex}.pdf`;
+    printed.set(url, filename);
+    pdfOrder.push(filename);
+    pdfIndex++;
 
-		}
-	}
-
+    // Recursively process linked HTML files
+    const hrefs = await page.$$eval('a', as => as.map(a => a.href));
+    for (let href of hrefs) {
+        if (href.indexOf("file://") === 0) {
+            let extension = path.extname(href.split('?')[0].split('#')[0]).toLowerCase();
+            if (extension !== ".html") {
+                continue;
+            }
+            await printPdf(href);
+        }
+    }
 
     const pdfFile = await page.pdf({
         format: 'A4',
         printBackground: true,
-		displayHeaderFooter: true,
-		footerTemplate: " "
+        displayHeaderFooter: true,
+        footerTemplate: "<span></span>",
+        margin: { top: "20mm", bottom: "20mm" }
     });
 
-    await browser.close();
+    await page.close();
 
-    return pdfFile;
+    writeBufferToFile(pdfFile, filename);
 };
 
-function writeBufferToFile(buffer, file){
-	fs.writeFile("./out/"+file, buffer,  "binary",function(err) { console.error(err); });
+function writeBufferToFile(buffer, file) {
+    if (!buffer) return;
+    try {
+        fs.writeFileSync(path.join(outputDir, file), buffer, "binary");
+    } catch (err) {
+        console.error("Error writing file:", file, err);
+    }
 }
 
+async function mergeAllPDF() {
+    console.log("Merging PDF");
+    let merger = new PDFMerger();
 
+    // Use the order in which PDFs were generated
+    for (const file of pdfOrder) {
+        const filePath = path.join(outputDir, file);
+        if (fs.existsSync(filePath)) {
+            console.log("Adding " + file + " to merge");
+            await merger.add(filePath);
+        }
+    }
 
-async function mergeAllPDF(){
-	console.log("Merging PDF");
-	let merger = new PDFMerger();
+    const exportPath = path.join(outputDir, 'Export.pdf');
+    await merger.save(exportPath);
 
-
-	files = await readdir("./out");
-	
-	files.forEach(function (file) {
-		console.log("Adding " + file + " to merge");
-		merger.add('./out/'+file);  //merge all pages. parameter is the path to file and filename.
-	});
-
-	await merger.save('Export.pdf'); //save under given name
-	
-	console.log("PDF Saved!");
-	console.log("Cleanup started");
-	files.forEach(function (file) {
-		console.log("Deleting " + file + "!");
-		fs.unlinkSync("./out/"+file);
-	});
-
+    console.log("PDF Saved at:", exportPath);
+    console.log("Cleanup started");
+    for (const file of pdfOrder) {
+        const filePath = path.join(outputDir, file);
+        if (fs.existsSync(filePath)) {
+            console.log("Deleting " + file + "!");
+            fs.unlinkSync(filePath);
+        }
+    }
 }
 
-(async() => {
-    const buffer = await printPdf(url);
-	writeBufferToFile(buffer, "0.pdf");
-	
-	await mergeAllPDF();
-	
+(async () => {
+    browser = await puppeteer.launch({ headless: true });
+    try {
+        await printPdf(url);
+        await mergeAllPDF();
+    } catch (err) {
+        console.error("Fatal error:", err);
+    } finally {
+        if (browser) await browser.close();
+    }
 })();
