@@ -1,7 +1,8 @@
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
+const fs = require('fs/promises');
+const fss = require('fs');
 const unzipper = require('unzipper');
 const os = require('os');
 const crypto = require('crypto');
@@ -142,7 +143,7 @@ app.post('/upload', upload.single('zipfile'), async (req, res) => {
     const htmlFiles = findHtmlFiles(tempDir, tempDir);
 
     if (htmlFiles.length === 0) {
-        fs.rmSync(tempDir, { recursive: true, force: true });
+        await fs.rm(tempDir, { recursive: true, force: true });
         return res.send(htmlTemplate(`<div class="msg error">No HTML files found in ZIP.</div>`));
     }
 
@@ -194,7 +195,7 @@ app.post('/generate', (req, res) => {
 
 app.get('/download', (req, res) => {
     const exportPath = path.join(__dirname, 'out', 'Export.pdf');
-    if (!fs.existsSync(exportPath)) {
+    if (!fss.existsSync(exportPath)) {
         return res.send(htmlTemplate(`<div class="msg error">No PDF available for download. Please upload and generate first.</div>`));
     }
     res.download(exportPath, 'Export.pdf');
