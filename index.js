@@ -1,11 +1,10 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
-const PDFMerger = require('pdf-merger-js').default;
-const util = require('util');
-const readdir = util.promisify(fs.readdir);
+const PDFMerger = require('pdf-merger-js'); // updated import
 
-const url = 'file:///Users/basti/code/NotionPDFGenerator/Kuehlung%20-%20index%201fade27b7c0d808b9709e68bc41f4b5a.html';
+// Accept URL from command line if provided
+const url = process.argv[2] || 'file:///Users/basti/code/NotionPDFGenerator/Kuehlung%20-%20index%201fade27b7c0d808b9709e68bc41f4b5a.html';
 
 // Ensure output directory exists
 const outputDir = path.join(__dirname, 'out');
@@ -35,10 +34,15 @@ const printPdf = async (url) => {
     }
     console.log('Generating PDF for: ' + url);
 
-    if (pdfIndex >= 100) {
-        //Failsafe
+    if (pdfIndex >= 1000) { // Increase failsafe for larger sites
         return;
     }
+
+    // Assign a unique filename for this PDF BEFORE recursion
+    const filename = `${pdfIndex}.pdf`;
+    printed.set(url, filename);
+    pdfOrder.push(filename);
+    pdfIndex++;
 
     const page = await browser.newPage();
 
@@ -51,12 +55,6 @@ const printPdf = async (url) => {
         waitUntil: 'networkidle2'
     });
 
-    // Assign a unique filename for this PDF
-    const filename = `${pdfIndex}.pdf`;
-    printed.set(url, filename);
-    pdfOrder.push(filename);
-    pdfIndex++;
-
     // Recursively process linked HTML files
     const hrefs = await page.$$eval('a', as => as.map(a => a.href));
     for (let href of hrefs) {
@@ -65,7 +63,10 @@ const printPdf = async (url) => {
             if (extension !== ".html") {
                 continue;
             }
-            await printPdf(href);
+            // Only recurse if not already printed
+            if (!printed.has(href)) {
+                await printPdf(href);
+            }
         }
     }
 
