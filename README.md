@@ -21,6 +21,7 @@ It works for my note-keeping system, but feel free to submit a pull request that
 1. Download the repo: https://github.com/AlexanderNorup/NotionPDFGenerator/archive/master.zip
 2. Extract the zip somewhere on your PC
 3. Navigate to the folder, and run `npm install` in the command-line
-4. Open the `index.js`, and change the `url` variable so it points to your exported HTML file
-5. Run `node index.js`
-6. Enjoy the `Export.pdf` file now found in the root project.
+4. Run `node index.js --url file:///path/to/your/exported/index.html`
+5. Enjoy the `Export.pdf` file now found in the `out` folder.
+
+Alternatively start the web interface with `npm start` and upload a ZIP export.

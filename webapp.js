@@ -1,12 +1,12 @@
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
+const fs = require('fs/promises');
+const fss = require('fs');
 const unzipper = require('unzipper');
-const { execFile } = require('child_process');
 const os = require('os');
 const crypto = require('crypto');
-const util = require('util');
+const generatePdf = require('./pdfGenerator');
 
 const app = express();
 const PORT = 3000;
@@ -105,73 +105,16 @@ app.get('/', (req, res) => {
     `));
 });
 
-app.post('/upload', upload.single('zipfile'), async (req, res) => {
-    if (!req.file) {
-        return res.send(htmlTemplate(`<div class="msg error">No file uploaded.</div>`));
-    }
-
-    // Create a unique temp directory for this job
-    const tempDir = path.join(os.tmpdir(), 'notionpdf_' + crypto.randomBytes(8).toString('hex'));
-    fs.mkdirSync(tempDir);
-
-    // Unzip the uploaded file and wait for extraction to finish
-    try {
-        await fs.createReadStream(req.file.path)
-            .pipe(unzipper.Extract({ path: tempDir }))
-            .promise();
-    } catch (err) {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-        fs.unlinkSync(req.file.path);
-        return res.send(htmlTemplate(`<div class="msg error">Failed to unzip file: ${err.message}</div>`));
-    }
-
-    // List all extracted files for debugging
-    function listFiles(dir, prefix = '') {
-        let out = '';
-        const files = fs.readdirSync(dir);
-        for (const file of files) {
-            const fullPath = path.join(dir, file);
-            const relPath = path.relative(tempDir, fullPath);
-            if (fs.statSync(fullPath).isDirectory()) {
-                out += `${prefix}<b>${relPath}/</b><br>`;
-                out += listFiles(fullPath, prefix + '&nbsp;&nbsp;');
-            } else {
-                out += `${prefix}${relPath}<br>`;
-            }
-        }
-        return out;
-    }
-    const fileTree = listFiles(tempDir);
-
-    // Clean up uploaded ZIP file (but keep extracted files for now)
-    fs.unlinkSync(req.file.path);
-
-    // Show the extracted file tree to the user
-    return res.send(htmlTemplate(`
-        <h2>Extraction Successful</h2>
-        <div class="msg">Extracted files:</div>
-        <div style="font-family:monospace; background:#f7fafc; padding:12px; border-radius:6px; margin-top:10px; max-height:300px; overflow:auto;">
-            ${fileTree}
-        </div>
-        <form method="GET" action="/">
-            <button type="submit" style="margin-top:18px;">Back</button>
-        </form>
-        <div class="footer" style="margin-top:24px;">
-            <i>Next step: Use this file tree to select the entry HTML file for PDF generation.</i>
-        </div>
-    `));
-});
-
 // Helper to recursively find all HTML files, but prefer root .html if it's the only one
-function findHtmlFiles(dir, baseDir) {
+async function findHtmlFiles(dir, baseDir) {
     let results = [];
-    const files = fs.readdirSync(dir);
+    const files = await fs.readdir(dir, { withFileTypes: true });
     for (const file of files) {
-        const fullPath = path.join(dir, file);
+        const fullPath = path.join(dir, file.name);
         const relPath = path.relative(baseDir, fullPath);
-        if (fs.statSync(fullPath).isDirectory()) {
-            results = results.concat(findHtmlFiles(fullPath, baseDir));
-        } else if (file.toLowerCase().endsWith('.html')) {
+        if (file.isDirectory()) {
+            results = results.concat(await findHtmlFiles(fullPath, baseDir));
+        } else if (file.name.toLowerCase().endsWith('.html')) {
             results.push(relPath);
         }
     }
@@ -185,21 +128,21 @@ app.post('/upload', upload.single('zipfile'), async (req, res) => {
 
     // Create a unique temp directory for this job
     const tempDir = path.join(os.tmpdir(), 'notionpdf_' + crypto.randomBytes(8).toString('hex'));
-    fs.mkdirSync(tempDir);
+    await fs.mkdir(tempDir);
 
     // Unzip the uploaded file and wait for extraction to finish
     try {
-        await fs.createReadStream(req.file.path)
+        await fss.createReadStream(req.file.path)
             .pipe(unzipper.Extract({ path: tempDir }))
             .promise();
     } catch (err) {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-        fs.unlinkSync(req.file.path);
+        await fs.rm(tempDir, { recursive: true, force: true });
+        await fs.unlink(req.file.path);
         return res.send(htmlTemplate(`<div class="msg error">Failed to unzip file: ${err.message}</div>`));
     }
 
     // List all HTML files for user selection
-    const htmlFiles = findHtmlFiles(tempDir, tempDir);
+    const htmlFiles = await findHtmlFiles(tempDir, tempDir);
 
     // If there is only one .html file and it's in the root, auto-select and proceed to PDF generation
     if (
@@ -211,21 +154,12 @@ app.post('/upload', upload.single('zipfile'), async (req, res) => {
         const entryPath = path.join(tempDir, entryHtml);
         const entryUrl = 'file://' + encodeURI(entryPath);
         const exportPath = path.join(__dirname, 'out', 'Export.pdf');
-        if (fs.existsSync(exportPath)) fs.unlinkSync(exportPath);
+        if (fss.existsSync(exportPath)) await fs.unlink(exportPath);
 
-        const scriptPath = path.join(__dirname, 'index.js');
-        const nodePath = process.execPath;
-        const { execFile } = require('child_process');
-        execFile(nodePath, [scriptPath, entryUrl], { timeout: 5 * 60 * 1000 }, (err, stdout, stderr) => {
-            fs.rmSync(tempDir, { recursive: true, force: true });
-
-            if (err) {
-                return res.send(htmlTemplate(`<div class="msg error"><b>Error:</b> ${err.message}<br><pre>${stderr}</pre></div>`));
-            }
-            if (!fs.existsSync(exportPath)) {
-                return res.send(htmlTemplate(`<div class="msg error">PDF generation failed.</div>`));
-            }
-            res.send(htmlTemplate(`
+        try {
+            await generatePdf(entryUrl, { outputDir: path.join(__dirname, 'out') });
+            await fs.rm(tempDir, { recursive: true, force: true });
+            return res.send(htmlTemplate(`
                 <div class="msg">
                     <b>PDF generated successfully!</b><br>
                     <a href="/download" style="color:#2b6cb0;text-decoration:underline;">Download Export.pdf</a>
@@ -234,13 +168,16 @@ app.post('/upload', upload.single('zipfile'), async (req, res) => {
                     <button type="submit" style="margin-top:18px;">Back</button>
                 </form>
             `));
-        });
+        } catch (err) {
+            await fs.rm(tempDir, { recursive: true, force: true });
+            return res.send(htmlTemplate(`<div class="msg error"><b>Error:</b> ${err.message}</div>`));
+        }
         return;
     }
 
     // Otherwise, show selection UI
     if (htmlFiles.length === 0) {
-        fs.rmSync(tempDir, { recursive: true, force: true });
+        await fs.rm(tempDir, { recursive: true, force: true });
         return res.send(htmlTemplate(`<div class="msg error">No HTML files found in ZIP.</div>`));
     }
 
@@ -263,7 +200,7 @@ app.post('/upload', upload.single('zipfile'), async (req, res) => {
 });
 
 // Handle PDF generation after user selects entry HTML
-app.post('/generate', express.urlencoded({ extended: true }), (req, res) => {
+app.post('/generate', express.urlencoded({ extended: true }), async (req, res) => {
     const tempDir = req.body.tempDir;
     const entryHtml = req.body.entryHtml;
     if (!tempDir || !entryHtml) {
@@ -271,29 +208,19 @@ app.post('/generate', express.urlencoded({ extended: true }), (req, res) => {
     }
 
     const entryPath = path.join(tempDir, entryHtml);
-    if (!fs.existsSync(entryPath)) {
-        fs.rmSync(tempDir, { recursive: true, force: true });
+    if (!fss.existsSync(entryPath)) {
+        await fs.rm(tempDir, { recursive: true, force: true });
         return res.send(htmlTemplate(`<div class="msg error">Selected HTML file not found.</div>`));
     }
 
     const entryUrl = 'file://' + encodeURI(entryPath);
     const exportPath = path.join(__dirname, 'out', 'Export.pdf');
-    if (fs.existsSync(exportPath)) fs.unlinkSync(exportPath);
+    if (fss.existsSync(exportPath)) await fs.unlink(exportPath);
 
-    const scriptPath = path.join(__dirname, 'index.js');
-    const nodePath = process.execPath;
-
-    const { execFile } = require('child_process');
-    execFile(nodePath, [scriptPath, entryUrl], { timeout: 5 * 60 * 1000 }, (err, stdout, stderr) => {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-
-        if (err) {
-            return res.send(htmlTemplate(`<div class="msg error"><b>Error:</b> ${err.message}<br><pre>${stderr}</pre></div>`));
-        }
-        if (!fs.existsSync(exportPath)) {
-            return res.send(htmlTemplate(`<div class="msg error">PDF generation failed.</div>`));
-        }
-        res.send(htmlTemplate(`
+    try {
+        await generatePdf(entryUrl, { outputDir: path.join(__dirname, 'out') });
+        await fs.rm(tempDir, { recursive: true, force: true });
+        return res.send(htmlTemplate(`
             <div class="msg">
                 <b>PDF generated successfully!</b><br>
                 <a href="/download" style="color:#2b6cb0;text-decoration:underline;">Download Export.pdf</a>
@@ -302,13 +229,16 @@ app.post('/generate', express.urlencoded({ extended: true }), (req, res) => {
                 <button type="submit" style="margin-top:18px;">Back</button>
             </form>
         `));
-    });
+    } catch (err) {
+        await fs.rm(tempDir, { recursive: true, force: true });
+        return res.send(htmlTemplate(`<div class="msg error"><b>Error:</b> ${err.message}</div>`));
+    }
 });
 
 // Make sure this is the only place you use res.send for /download:
 app.get('/download', (req, res) => {
     const exportPath = path.join(__dirname, 'out', 'Export.pdf');
-    if (!fs.existsSync(exportPath)) {
+    if (!fss.existsSync(exportPath)) {
         return res.send(htmlTemplate(`<div class="msg error">No PDF available for download. Please upload and generate first.</div>`));
     }
     res.download(exportPath, 'Export.pdf');
