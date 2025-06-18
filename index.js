@@ -1,7 +1,7 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
-const PDFMerger = require('pdf-merger-js'); // updated import
+const { PDFDocument } = require('pdf-lib');
 
 // Accept URL from command line if provided
 const url = process.argv[2] || 'file:///Users/basti/code/NotionPDFGenerator/Kuehlung%20-%20index%201fade27b7c0d808b9709e68bc41f4b5a.html';
@@ -94,21 +94,25 @@ function writeBufferToFile(buffer, file) {
 
 async function mergeAllPDF() {
     console.log("Merging PDF");
-    let merger = new PDFMerger();
+    const mergedPdf = await PDFDocument.create();
 
     // Use the order in which PDFs were generated
     for (const file of pdfOrder) {
         const filePath = path.join(outputDir, file);
         if (fs.existsSync(filePath)) {
             console.log("Adding " + file + " to merge");
-            await merger.add(filePath);
+            const pdfBytes = fs.readFileSync(filePath);
+            const pdf = await PDFDocument.load(pdfBytes);
+            const copiedPages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
+            copiedPages.forEach((page) => mergedPdf.addPage(page));
         }
     }
 
     const exportPath = path.join(outputDir, 'Export.pdf');
-    await merger.save(exportPath);
-
+    const pdfBytes = await mergedPdf.save();
+    fs.writeFileSync(exportPath, pdfBytes);
     console.log("PDF Saved at:", exportPath);
+
     console.log("Cleanup started");
     for (const file of pdfOrder) {
         const filePath = path.join(outputDir, file);

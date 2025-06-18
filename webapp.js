@@ -80,17 +80,17 @@ function generatePDFAndRespond(entryPath, tempDir, res) {
     const scriptPath = path.join(__dirname, 'index.js');
     const nodePath = process.execPath;
 
-    execFile(nodePath, [scriptPath, entryUrl], { timeout: 5 * 60 * 1000 }, (err, stdout, stderr) => {
+    execFile(nodePath, [scriptPath, entryUrl], { timeout: 10 * 60 * 1000 }, (err, stdout, stderr) => {
         // Always clean up tempDir
         if (fs.existsSync(tempDir)) {
             fs.rmSync(tempDir, { recursive: true, force: true });
         }
 
         if (err) {
-            return res.send(htmlTemplate(`<div class="msg error"><b>PDF Generation Error:</b> ${err.message}<br><pre>${stderr}</pre><br><b>Output:</b><br><pre>${stdout}</pre></div>`));
+            return res.send(htmlTemplate(`<div class="msg error"><b>PDF Generation Error:</b> ${err.message || 'Unknown error occurred'}<br><b>Error Details:</b><br><pre>${stderr || 'No error details available'}</pre><br><b>Output:</b><br><pre>${stdout || 'No output available'}</pre></div>`));
         }
         if (!fs.existsSync(exportPath)) {
-            return res.send(htmlTemplate(`<div class="msg error">PDF generation failed. No output file found.<br><b>Details:</b><br><pre>${stderr}</pre><br><b>Output:</b><br><pre>${stdout}</pre></div>`));
+            return res.send(htmlTemplate(`<div class="msg error">PDF generation failed. No output file found.<br><b>Error Details:</b><br><pre>${stderr || 'No error details available'}</pre><br><b>Output:</b><br><pre>${stdout || 'No output available'}</pre></div>`));
         }
         res.send(htmlTemplate(`
             <div class="msg">
